@@ -191,7 +191,7 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
     scalar *BtH, ctemp;
     real *spanfreqs, *spanfreqs2, *freqs2re, *freqs2im, *sdos,
          df, fpref, npref = 2*Vol/3.141592653589793;
-    int iodims0[1] = {freq_num*nG}, iodims1[1] = {3}, iodims2[1] = {6},
+    int iodims0[2] = {freq_num, nG}, iodims1[1] = {3}, iodims2[2] = {2,3},
         iodims3[1] = {3}, iodims4[1] = {1}, iostart[1] = {0}; /* for .h5 write */
     matrixio_id file_id, data_id;
     char *savename;
@@ -261,7 +261,7 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
        /* write contents of sdos to hdf5 format; so far just as one long 1d array to */
        file_id = matrixio_create_serial(savename);
 
-       data_id = matrixio_create_dataset(file_id, "sdos", "remember to unfold", 1, iodims0);
+       data_id = matrixio_create_dataset(file_id, "sdos", "freqs in rows, G in cols", 1, iodims0);
        matrixio_write_real_data(data_id, iodims0, iostart, 1, sdos);
 
        data_id = matrixio_create_dataset(file_id, "freqspan", /* write some meta data as well */
@@ -269,7 +269,7 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
        matrixio_write_real_data(data_id, iodims1, iostart, 1, freqspan);
 
        data_id = matrixio_create_dataset(file_id, "iGspan",
-                    "iG1_min, iG1_max, iG2_min, iG2_max, iG3_min, iG3_max", 1, iodims2);
+                    "iG1_min, iG1_max; iG2_min, iG2_max; iG3_min, iG3_max", 1, iodims2);
        matrixio_write_real_data(data_id, iodims2, iostart, 1, iGspan);
 
        data_id = matrixio_create_dataset(file_id, "kpoint", "kx, ky, kz", 1, iodims3);
