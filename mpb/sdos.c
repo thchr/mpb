@@ -191,8 +191,10 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
     scalar *BtH, ctemp;
     real *spanfreqs, *spanfreqs2, *freqs2re, *freqs2im, *sdos,
          df, fpref, npref = 2*Vol/3.141592653589793;
-    int iodims0[2] = {freq_num, nG}, iodims1[1] = {3}, iodims2[2] = {2,3},
-        iodims3[1] = {3}, iodims4[1] = {1}, iostart[1] = {0}; /* for .h5 write */
+    int iodims0[4] = {freq_num,nG3,nG2,nG1}, iodims1[1] = {3}, iodims2[2] = {3,2},
+        iodims3[1] = {3}, iodims4[1] = {1}, 
+        iostart0[4] = {0,0,0,0}, iostart2[2] = {0,0}, iostart[1] = {0}; /* for .h5 write */
+    /* int rank0 = (nG3 == 1) ? ( (nG2 == 1) ? ( (nG1 == 1) ? 1 : 2 ) : 3) : 4; */
     matrixio_id file_id, data_id;
     char *savename;
 
@@ -258,27 +260,34 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
     savename = fix_fname(savename, saveprefix, mdata, 1);
 
     if (mpi_is_master()) {
-       /* write contents of sdos to hdf5 format; so far just as one long 1d array to */
-       file_id = matrixio_create_serial(savename);
+       /* write contents of sdos to hdf5 format */
+       file_id = matrixio_create_serial(savename); 
 
-       data_id = matrixio_create_dataset(file_id, "sdos", "freqs in rows, G in cols", 1, iodims0);
-       matrixio_write_real_data(data_id, iodims0, iostart, 1, sdos);
+       data_id = matrixio_create_dataset(file_id, "sdos", "freqs in cols, G in rows", 4, iodims0);
+       mpi_one_printf("monkey %d\n",1); 
+       matrixio_write_real_data(data_id, iodims0, iostart0, 1, sdos);
+       mpi_one_printf("monkey %d\n",2); 
+       matrixio_close_dataset(data_id);
+       mpi_one_printf("monkey %d\n",3);
 
        data_id = matrixio_create_dataset(file_id, "freqspan", /* write some meta data as well */
                                 "freq_min, freq_max, freq_num", 1, iodims1);
        matrixio_write_real_data(data_id, iodims1, iostart, 1, freqspan);
+       matrixio_close_dataset(data_id);
 
        data_id = matrixio_create_dataset(file_id, "iGspan",
-                    "iG1_min, iG1_max; iG2_min, iG2_max; iG3_min, iG3_max", 1, iodims2);
-       matrixio_write_real_data(data_id, iodims2, iostart, 1, iGspan);
+                    "iG1_min, iG2_min, iG3_min; iG1_max, iG2_max, iG3_max", 2, iodims2);
+       matrixio_write_real_data(data_id, iodims2, iostart2, 1, iGspan);
+       matrixio_close_dataset(data_id);
 
        data_id = matrixio_create_dataset(file_id, "kpoint", "kx, ky, kz", 1, iodims3);
        matrixio_write_real_data(data_id, iodims3, iostart, 1, mdata->current_k);
+       matrixio_close_dataset(data_id);
 
        data_id = matrixio_create_dataset(file_id, "eta", "imag part in omegan - i*eta", 1, iodims4);
        matrixio_write_real_data(data_id, iodims4, iostart, 1, (real *) &eta);
-
        matrixio_close_dataset(data_id);
+
        matrixio_close(file_id);
    }
 
