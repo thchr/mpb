@@ -24,6 +24,7 @@
 
 #include <check.h>
 #include <blasglue.h>
+#include <mpiglue.h>
 #include <matrices.h>
 #include <matrixio.h>
 
@@ -41,7 +42,7 @@ void BtH_overlap(scalar *BtH, int band_start, int n_bands,
     int nG = (iG1_max-iG1_min+1)*(iG2_max-iG2_min+1)*(iG3_max-iG3_min+1); /* # of G vecs req'ed */
     int *ix, *iy, *iz;
     scalar *BtH_local;
-	 CHK_MALLOC(ix,int,nG);
+    CHK_MALLOC(ix,int,nG);
     CHK_MALLOC(iy,int,nG);
     CHK_MALLOC(iz,int,nG);
 
@@ -96,32 +97,32 @@ void BtH_overlap(scalar *BtH, int band_start, int n_bands,
            maxwell_set_num_bands(mdata, final_band - ib);
            evectmatrix_resize(&Hblock, final_band - ib, 0);
        }
-
+    
        /* Beware the notation: H is really B and Hblock is blocks of H */
        maxwell_compute_H_from_B(mdata, H, Hblock,
                                 (scalar_complex *) mdata->fft_data,
                                 ib, 0, Hblock.p);
-
+    
        /* Now we calculate a matrix BtH = Tr(H*adjoint(B)) in the G basis:
         * the trace works over the polarization subspace (c-indices)      */
-       for (n = 0; n < nG; ++n) {     /* req'd G-vecs, indices from i{x,y,z} */
-         int ixn = ix[n] - local_x_start, iyn = iy[n], izn = iz[n];
-         if (ixn >= 0 && ixn < local_nx) {
-            for (ibb = ib; ibb < ib + Hblock.p; ++ibb) { /* bands in the block */
-               scalar polsum;
-               ASSIGN_ZERO(polsum);
-               for (c = 0; c < 2; ++c) {    /* polarization (transverse basis) */
-                  ACCUMULATE_SUM_CONJ_MULT(polsum, /* a += conj(b) * c for (a,b,c) call */
-                     H.data[(((ixn*ny+iyn)*nz+izn)*2+c)*H.p           +ibb   ],
-                     Hblock.data[(((ixn*ny+iyn)*nz+izn)*2+c)*Hblock.p +ibb-ib] );
-               }
-               BtH_local[n*n_bands+ibb-band_start] = polsum; /* row-major */
-            }
-         }
-      }
+       for (n = 0; n < nG; ++n) {           /* req'd G-vecs, indices from i{x,y,z} */
+          int ixn = ix[n] - local_x_start, iyn = iy[n], izn = iz[n]; /* MPI local proc indices */
+          if (ixn >= 0 && ixn < local_nx) { /* if we're looking at element on this MPI process */
+             for (ibb = ib; ibb < ib + Hblock.p; ++ibb) { /* bands in the block */
+                scalar polsum;
+                ASSIGN_ZERO(polsum);
+                for (c = 0; c < 2; ++c) {   /* polarization (transverse basis) */
+                   ACCUMULATE_SUM_CONJ_MULT(polsum, /* a += conj(b) * c for (a,b,c) call */
+                      H.data     [(((ixn*ny+iyn)*nz+izn)*2+c)*H.p      +ibb   ],
+                      Hblock.data[(((ixn*ny+iyn)*nz+izn)*2+c)*Hblock.p +ibb-ib] );
+                }
+                BtH_local[n*n_bands+ibb-band_start] = polsum; /* row-major */
+             }
+          }
+       }
     }
 
-    /* sum BtH_local arrays from all processes into BtH */
+    /* sum (= combine) BtH_local arrays from all processes into BtH */
     mpi_allreduce(BtH_local, BtH, nG*n_bands * SCALAR_NUMVALS,
                   real, SCALAR_MPI_TYPE, MPI_SUM, mpb_comm);
     free(BtH_local);
@@ -140,7 +141,7 @@ void BtH_overlap(scalar *BtH, int band_start, int n_bands,
  * floating-point mischief */
 int myround(float x){
     assert(x >= INT_MIN - 0.5);
-	assert(x <= INT_MAX + 0.5);
+    assert(x <= INT_MAX + 0.5);
     if (x >= 0)
        return (int) (x+0.5);
     return (x-0.5); /* else (for negative values) */
@@ -153,21 +154,21 @@ int myround(float x){
  * may be NULL, in which case they are treated as the empty string. */
 /* copied from fields.c */
 static char *fix_fname(const char *fname, const char *prefix,
-		       maxwell_data *d, int parity_suffix)
+                       maxwell_data *d, int parity_suffix)
 {
-     char *s;
-     CHK_MALLOC(s, char,
-		(fname ? strlen(fname) : 0) +
-		(prefix ? strlen(prefix) : 0) + 20);
-     strcpy(s, prefix ? prefix : "");
-     strcat(s, fname ? fname : "");
-     if (parity_suffix && d->parity != NO_PARITY) {
-	  /* assumes parity suffix is less than 20 characters;
-  	   * currently it is less than 12 */
-	  strcat(s, ".");
-	  strcat(s, parity_string(d));
-     }
-     return s;
+    char *s;
+    CHK_MALLOC(s, char,
+       (fname ? strlen(fname) : 0) +
+       (prefix ? strlen(prefix) : 0) + 20);
+    strcpy(s, prefix ? prefix : "");
+    strcat(s, fname ? fname : "");
+    if (parity_suffix && d->parity != NO_PARITY) {
+       /* assumes parity suffix is less than 20 characters;
+        * currently it is less than 12 */
+       strcat(s, ".");
+       strcat(s, parity_string(d));
+    }
+    return s;
 }
 
 
@@ -181,16 +182,16 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
               char *saveprefix)
 {
     int i,b,n;
-	int iG1_min = myround(iG_min.x), iG2_min = myround(iG_min.y), iG3_min = myround(iG_min.z);
-	int iG1_max = myround(iG_max.x), iG2_max = myround(iG_max.y), iG3_max = myround(iG_max.z);
+    int iG1_min = myround(iG_min.x), iG2_min = myround(iG_min.y), iG3_min = myround(iG_min.z);
+    int iG1_max = myround(iG_max.x), iG2_max = myround(iG_max.y), iG3_max = myround(iG_max.z);
     int nG1 = iG1_max-iG1_min+1,     nG2 = iG2_max-iG2_min+1,     nG3 = iG3_max-iG3_min+1;
     int nG = nG1 * nG2 * nG3; /* total # of G vecs req'ed */
     real iGspan[6] = {iG1_min, iG1_max, iG2_min, iG2_max, iG3_min, iG3_max}, /* requires C99 (or >) */
-         freqspan[3] = {freq_min, freq_max, freq_num};
+    freqspan[3] = {freq_min, freq_max, freq_num};
     scalar *BtH, ctemp;
     real *spanfreqs, *spanfreqs2, *freqs2re, *freqs2im, *sdos,
          df, fpref, npref = 2*Vol/3.141592653589793;
-	int iodims0[1] = {freq_num*nG}, iodims1[1] = {3}, iodims2[1] = {6},
+    int iodims0[1] = {freq_num*nG}, iodims1[1] = {3}, iodims2[1] = {6},
         iodims3[1] = {3}, iodims4[1] = {1}, iostart[1] = {0}; /* for .h5 write */
     matrixio_id file_id, data_id;
     char *savename;
@@ -217,7 +218,7 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
 
     /* get the squared eigenfrequencies (real and imag), starting from band_start */
     for (b = 0; b < n_bands; ++b){
-	   freqs2re[b] = pow(freqs.items[b+band_start],2) - pow(eta,2);
+       freqs2re[b] = pow(freqs.items[b+band_start],2) - pow(eta,2);
        freqs2im[b] = -2*freqs.items[b+band_start]*eta;
     }
 
