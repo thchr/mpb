@@ -271,11 +271,8 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
        file_id = matrixio_create_serial(savename); 
 
        data_id = matrixio_create_dataset(file_id, "sdos", "freqs in cols, G in rows", 4, iodims0);
-       mpi_one_printf("monkey %d\n",1); 
        matrixio_write_real_data(data_id, iodims0, iostart0, 1, sdos);
-       mpi_one_printf("monkey %d\n",2); 
        matrixio_close_dataset(data_id);
-       mpi_one_printf("monkey %d\n",3);
 
        data_id = matrixio_create_dataset(file_id, "freqspan", /* write some meta data as well */
                                 "freq_min, freq_max, freq_num", 1, iodims1);
