@@ -172,9 +172,17 @@ static char *fix_fname(const char *fname, const char *prefix,
 }
 
 
-/* calculate the spectral density of states (sdos) and write it
- * to an .h5 file. The variable band_start follows the Guile
- * convention and starts at 1 (conversion to 0-index'ing inside) */
+/* Calculates the spectral density of states (sdos) and write it
+ * to an .h5 file. The variable band_start follows the libctl
+ * convention and starts at 1 (conversion to 0-index'ing inside). 
+ * The LDOS is summed over polarizations and is defined in the
+ * sense = : 
+ *    LDOS = npref*Im{sum(B*H^dagger/((omegan-i*eta)^2-omega^2)]}
+ * where npref = 2*omega*Vuc/pi, and where LDOS, B, and H are eva-
+ * luated at (k,omega). B and H are in the PW basis. Frequencies
+ * are requested via freq_min, freq_max, and freq_num, such that 
+ * omega spans from freq_min to freq_max in freq_num steps.
+ * This function is only really relevant for supercell calcs. */
 void get_sdos(number freq_min, number freq_max, integer freq_num,
               number eta,
               integer band_start, integer n_bands,
@@ -186,20 +194,19 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
     int iG1_max = myround(iG_max.x), iG2_max = myround(iG_max.y), iG3_max = myround(iG_max.z);
     int nG1 = iG1_max-iG1_min+1,     nG2 = iG2_max-iG2_min+1,     nG3 = iG3_max-iG3_min+1;
     int nG = nG1 * nG2 * nG3; /* total # of G vecs req'ed */
-    real iGspan[6] = {iG1_min, iG1_max, iG2_min, iG2_max, iG3_min, iG3_max}, /* requires C99 (or >) */
+    real iGspan[6] = {iG1_min, iG1_max, iG2_min, iG2_max, iG3_min, iG3_max}, /* presupposes C99 (or >) */
     freqspan[3] = {freq_min, freq_max, freq_num};
     scalar *BtH, ctemp;
     real *spanfreqs, *spanfreqs2, *freqs2re, *freqs2im, *sdos,
          df, fpref, npref = 2*Vol/3.141592653589793;
-    int iodims0[4] = {freq_num,nG3,nG2,nG1}, iodims1[1] = {3}, iodims2[2] = {3,2},
-        iodims3[1] = {3}, iodims4[1] = {1}, 
-        iostart0[4] = {0,0,0,0}, iostart2[2] = {0,0}, iostart[1] = {0}; /* for .h5 write */
-    /* int rank0 = (nG3 == 1) ? ( (nG2 == 1) ? ( (nG1 == 1) ? 1 : 2 ) : 3) : 4; */
+    int iodims0[4] = {freq_num,nG3,nG2,nG1}, iodims1[1] = {3},   /* for .h5 write */
+        iodims2[2] = {3,2}, iodims3[1] = {3}, iodims4[1] = {1}, 
+        iostart0[4] = {0,0,0,0}, iostart2[2] = {0,0}, iostart[1] = {0}; 
     matrixio_id file_id, data_id;
     char *savename;
 
-    /* allocate arrays */
-    CHK_MALLOC(BtH, scalar, nG*n_bands);
+    /* allocate arrays to heap */
+    CHK_MALLOC(BtH,      scalar, nG*n_bands);
     CHK_MALLOC(spanfreqs,  real, freq_num);
     CHK_MALLOC(spanfreqs2, real, freq_num);
     CHK_MALLOC(freqs2re,   real, n_bands);
@@ -207,7 +214,7 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
     CHK_MALLOC(sdos,       real, freq_num*nG);
     CHK_MALLOC(savename,   char, 256); /* assume savename less than 256 chars */
 
-    /* in Guile interface, band_start is considered to start at 1; in C it is zero-index */
+    /* in libctl (Scheme), band_start is one-indexed; in C it is zero-indexed */
     band_start -= 1;
 
     /* create a frequency array that spans freq_min to freq_max in freq_num steps */
@@ -215,7 +222,7 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
     df = (freq_max-freq_min)/(freq_num-1);
     for (i = 1; i < freq_num; ++i)
        spanfreqs[i] = spanfreqs[i-1]+df;
-    for (i = 0; i < freq_num; ++i)
+    for (i = 0; i < freq_num; ++i) /* square spanfreqs */
        spanfreqs2[i] = pow(spanfreqs[i],2);
 
     /* get the squared eigenfrequencies (real and imag), starting from band_start */
@@ -245,13 +252,13 @@ void get_sdos(number freq_min, number freq_max, integer freq_num,
        for (n = 0; n < nG; ++n) {         /* G-vector loop */
           sdos[i*nG+n] = 0;               /* init = 0 before adding anything */
           for (b = 0; b < n_bands; ++b) { /* band loop */
-             ASSIGN_SCALAR(ctemp, /* = (omegan-i*eta)^2 - omega^2 (= denom) */
+             ASSIGN_SCALAR(ctemp,         /* = (omegan-i*eta)^2 - omega^2 (= denom) */
                            freqs2re[b]-spanfreqs2[i],
                            freqs2im[b]);
              ASSIGN_DIV(ctemp, *(BtH+n*n_bands+b), ctemp); /* = BtH/denom (= fraction) */
-             sdos[i*nG+n] += SCALAR_IM(ctemp);  /* += Im(fraction) | sum over included bands */
+             sdos[i*nG+n] += SCALAR_IM(ctemp);  /* = Im(fraction) & sum over included bands */
           }
-          sdos[i*nG+n] *= fpref; /* multiply by prefactor */
+          sdos[i*nG+n] *= fpref; /* multiply by prefactor (2*omega*Vuc/pi) */
        }
     }
 
