@@ -43,23 +43,23 @@ sqmatrix shift_overlap(int band_start, int n_bands, int s1, int s2, int s3)
     S1 = create_sqmatrix(n_bands);
     S2 = create_sqmatrix(n_bands);
 
-    for (ib = band_start; ib < final_band; ib += Hblock.alloc_p) {
-        if (ib + Hblock.alloc_p > final_band) {
+    for (ib = band_start; ib < final_band; ib += W[0].alloc_p) {
+        if (ib + W[0].alloc_p > final_band) {
             maxwell_set_num_bands(mdata, final_band - ib);
-            evectmatrix_resize(&Hblock, final_band - ib, 0);
+            evectmatrix_resize(&W[0], final_band - ib, 0);
         }
-        maxwell_compute_H_from_shifted_B(mdata, H, Hblock,
+        maxwell_compute_H_from_shifted_B(mdata, H, W[0],
                                          (scalar_complex *) mdata->fft_data,
                                          s1, s2, s3,
-                                         ib, 0, Hblock.p);
+                                         ib, 0, W[0].p);
 
-        evectmatrix_XtY_slice2(U, H, Hblock, band_start, 0, n_bands, Hblock.p,
+        evectmatrix_XtY_slice2(U, H, W[0], band_start, 0, n_bands, W[0].p,
                                ib-band_start, S1, S2);
     }
 
     /* Reset scratch matrix sizes: */
-    evectmatrix_resize(&Hblock, Hblock.alloc_p, 0);
-    maxwell_set_num_bands(mdata, Hblock.alloc_p);
+    evectmatrix_resize(&W[0], W[0].alloc_p, 0);
+    maxwell_set_num_bands(mdata, W[0].alloc_p);
 
     destroy_sqmatrix(S2);
     destroy_sqmatrix(S1);
