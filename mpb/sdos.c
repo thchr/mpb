@@ -66,7 +66,7 @@ void BtH_overlap(scalar *BtH, int band_start, int n_bands,
      * We adopt the convention that i{1,2,3} refers to G-vectors (sign-flip incorporated)
      *        G(i1,i2,i3) = i1*G1 + i2*G2 + i3*G3
      * On the other hand, i{x,y,z} refer to their associated array positions in
-     * the evectmatrices H and Hblock.                                                  */
+     * the evectmatrices H and W[0] (work matrix).                                      */
     for (i1 = iG1_min; i1 <= iG1_max; ++i1) {
        ixt = i1 <= 0 ? -i1 : nx - i1;
        for (i2 = iG2_min; i2 <= iG2_max; ++i2) {
@@ -92,29 +92,29 @@ void BtH_overlap(scalar *BtH, int band_start, int n_bands,
 
     /* ...we have to do this in blocks of eigensolver_block_size since
      * the work matrix W[0] may not have enough space to do it at once. */
-    for (ib = band_start; ib < final_band; ib += Hblock.alloc_p) {
-       if (ib + Hblock.alloc_p > final_band) {
+    for (ib = band_start; ib < final_band; ib += W[0].alloc_p) {
+       if (ib + W[0].alloc_p > final_band) {
            maxwell_set_num_bands(mdata, final_band - ib);
-           evectmatrix_resize(&Hblock, final_band - ib, 0);
+           evectmatrix_resize(&W[0], final_band - ib, 0);
        }
     
-       /* Beware the notation: H is really B and Hblock is blocks of H */
-       maxwell_compute_H_from_B(mdata, H, Hblock,
+       /* Beware the notation: H is really B and W[0] is blocks of H */
+       maxwell_compute_H_from_B(mdata, H, W[0],
                                 (scalar_complex *) mdata->fft_data,
-                                ib, 0, Hblock.p);
+                                ib, 0, W[0].p);
     
        /* Now we calculate a matrix BtH = Tr(H*adjoint(B)) in the G basis:
         * the trace works over the polarization subspace (c-indices)      */
        for (n = 0; n < nG; ++n) {           /* req'd G-vecs, indices from i{x,y,z} */
           int ixn = ix[n] - local_x_start, iyn = iy[n], izn = iz[n]; /* MPI local proc indices */
           if (ixn >= 0 && ixn < local_nx) { /* if we're looking at element on this MPI process */
-             for (ibb = ib; ibb < ib + Hblock.p; ++ibb) { /* bands in the block */
+             for (ibb = ib; ibb < ib + W[0].p; ++ibb) { /* bands in the block */
                 scalar polsum;
                 ASSIGN_ZERO(polsum);
                 for (c = 0; c < 2; ++c) {   /* polarization (transverse basis) */
                    ACCUMULATE_SUM_CONJ_MULT(polsum, /* a += conj(b) * c for (a,b,c) call */
                       H.data     [(((ixn*ny+iyn)*nz+izn)*2+c)*H.p      +ibb   ],
-                      Hblock.data[(((ixn*ny+iyn)*nz+izn)*2+c)*Hblock.p +ibb-ib] );
+                      W[0].data[(((ixn*ny+iyn)*nz+izn)*2+c)*W[0].p +ibb-ib] );
                 }
                 BtH_local[n*n_bands+ibb-band_start] = polsum; /* row-major */
              }
@@ -128,8 +128,8 @@ void BtH_overlap(scalar *BtH, int band_start, int n_bands,
     free(BtH_local);
 
     /* Reset matrix sizes and free memory */
-    evectmatrix_resize(&Hblock, Hblock.alloc_p, 0);
-    maxwell_set_num_bands(mdata, Hblock.alloc_p);
+    evectmatrix_resize(&W[0], W[0].alloc_p, 0);
+    maxwell_set_num_bands(mdata, W[0].alloc_p);
     free(ix);
     free(iy);
     free(iz);
