@@ -1,5 +1,5 @@
 # Process this file with autoconf to produce a configure script.
-AC_INIT(mpb, 1.6-dev, stevenj@alum.mit.edu)
+AC_INIT(mpb, 1.6.1, stevenj@alum.mit.edu)
 AC_CONFIG_SRCDIR([src/matrices/matrices.c])
 AC_CONFIG_HEADER([config.h src/mpbconf.h])
 AC_CONFIG_MACRO_DIR([m4])
@@ -18,7 +18,7 @@ AC_DEFINE_UNQUOTED(MPB_VERSION_MAJOR, [$VERSION_MAJOR], [major version])
 AC_DEFINE_UNQUOTED(MPB_VERSION_MINOR, [$VERSION_MINOR], [minor version])
 AC_DEFINE_UNQUOTED(MPB_VERSION_PATCH, [$VERSION_PATCH], [patch version])
 
-AM_INIT_AUTOMAKE([foreign check-news color-tests parallel-tests silent-rules 1.11])
+AM_INIT_AUTOMAKE([foreign color-tests parallel-tests silent-rules 1.11])
 AM_SILENT_RULES(yes)
 AC_SUBST(SHARED_VERSION_INFO)
 AM_ENABLE_SHARED(no) dnl shared libs cause too many headaches to be default
@@ -271,7 +271,22 @@ if test "$ok" = "yes"; then
 fi
 
 ##############################################################################
+
+AC_ARG_WITH(libctl, [AC_HELP_STRING([--with-libctl=<dir>],[specify libctl directory])], with_libctl=$withval, with_libctl=yes)
+if test "x$with_libctl" != "xyes" -a "x$with_libctl" != "xno"; then
+	LIBCTL_DIR="$with_libctl"
+	with_libctl=yes
+fi
+
+AM_CONDITIONAL(WITH_LIBCTL, test "x$with_libctl" != xno)
+
+##############################################################################
 # Check for Guile library and flags:
+
+if test "x$with_libctl" != xno; then
+
+save_LIBS=$LIBS
+save_CPPFLAGS=$CPPFLAGS
 
 AC_CHECK_PROG(guile_ok, guile, yes, no)
 if test x"$guile_ok" = xno; then
@@ -286,9 +301,12 @@ if test "x$GUILE_CONFIG" = "xunknown"; then
         AC_CHECK_LIB(guile, gh_eval_str, [],
                      [AC_CHECK_LIB(guile, scm_eval_string, [],
 		         [AC_MSG_ERROR([linking to guile failed])])])
+		GUILE_LIBS="-lguile -lguile-ltdl -ldl -lreadline"
 else
-        CPPFLAGS="$CPPFLAGS `$GUILE_CONFIG compile`"
-        LIBS="`$GUILE_CONFIG link` $LIBS"
+	GUILE_LIBS=`$GUILE_CONFIG link`
+	GUILE_CPPFLAGS=`$GUILE_CONFIG compile`
+	CPPFLAGS="$CPPFLAGS $GUILE_CPPFLAGS"
+	LIBS="$GUILE_LIBS $LIBS"
 	AC_MSG_CHECKING([if linking to guile works])
 	AC_TRY_LINK_FUNC(gh_enter, AC_MSG_RESULT(yes),
  	  [AC_TRY_LINK_FUNC(scm_boot_guile, AC_MSG_RESULT(yes),
@@ -361,16 +379,23 @@ else
 fi
 fi
 AC_SUBST(ACTIVATE_READLINE)
+AC_SUBST(GUILE_LIBS)
+AC_SUBST(GUILE_CPPFLAGS)
+
+LIBS=$save_LIBS
+CPPFLAGS=$save_CPPFLAGS
+
+fi # with_libctl
 
 ##############################################################################
 # Check for libctl library and files
 
-AC_ARG_WITH(libctl, [AC_HELP_STRING([--with-libctl=<dir>],[specify libctl directory])], ok=$withval, ok=yes)
-if test "$ok" = "no"; then
-        AC_MSG_ERROR([libctl is required and you may not disable it])
-elif test "$ok" != "yes"; then
-	LIBCTL_DIR="$ok"
-fi
+if test "x$with_libctl" != xno; then
+
+save_LIBS=$LIBS
+save_CPPFLAGS=$CPPFLAGS
+LIBS="$GUILE_LIBS $LIBS"
+CPPFLAGS="$CPPFLAGS $GUILE_CPPFLAGS"
 
 AC_MSG_CHECKING([for libctl dir])
 if test x != x"$LIBCTL_DIR" -a ! -r "$LIBCTL_DIR/base/ctl.scm"; then
@@ -380,10 +405,10 @@ if test x = x"$LIBCTL_DIR" -a -r /usr/local/share/libctl/base/ctl.scm; then
 	LIBCTL_DIR="/usr/local/share/libctl"
 fi
 if test x = x"$LIBCTL_DIR" -a -r /usr/share/libctl3/base/ctl.scm; then
-        LIBCTL_DIR="/usr/share/libctl3"
+	LIBCTL_DIR="/usr/share/libctl3"
 fi
 if test x = x"$LIBCTL_DIR" -a -r /usr/share/libctl/base/ctl.scm; then
-        LIBCTL_DIR="/usr/share/libctl"
+	LIBCTL_DIR="/usr/share/libctl"
 fi
 if test x = x"$LIBCTL_DIR"; then
 	AC_MSG_ERROR([could not find libctl files; use --with-libctl=<dir>])
@@ -416,7 +441,7 @@ fi
 AC_SUBST(CTL_H_CPPFLAG)
 
 # Check libctl version >= LIBCTL_MAJOR.LIBCTL_MINOR.LIBCTL_BUGFIX
-LIBCTL_MAJOR=3; LIBCTL_MINOR=2; LIBCTL_BUGFIX=1
+LIBCTL_MAJOR=4; LIBCTL_MINOR=0; LIBCTL_BUGFIX=0
 AC_MSG_CHECKING([whether libctl version is at least ${LIBCTL_MAJOR}.${LIBCTL_MINOR}.${LIBCTL_BUGFIX}])
 AC_EGREP_CPP(yes, [[
 #include <ctl.h>
@@ -434,8 +459,39 @@ else
    AC_MSG_RESULT(no)
 fi
 
-# On IRIX, basename/dirname functions in libctl/main.c require -lgen
-AC_CHECK_LIB(gen, basename)
+LIBS=$save_LIBS
+CPPFLAGS=$save_CPPFLAGS
+
+fi # with_libctl
+
+
+##############################################################################
+# check for libctlgeom, used to build mpb-data ... doesn't require guile
+
+AC_CHECK_LIB(ctlgeom, vector3_dot, [with_libctlgeom=yes], [with_libctlgeom=no])
+
+if test "x$with_libctlgeom" = xyes; then
+	# check for ctlgeom.h (Fedora may put it in /usr/include/ctl)
+	CTLGEOM_H_CPPFLAG=""
+	AC_CHECK_HEADER(ctlgeom.h, [CTLGEOM_H_CPPFLAG=" "], [
+	  save_CPPFLAGS=$CPPFLAGS
+	  AC_MSG_CHECKING([for alternate ctlgeom.h location])
+	  for ctl_h_path in /usr/include/ctl /usr/local/include/ctl; do
+	     CPPFLAGS="$save_CPPFLAGS -I$ctl_h_path"
+	     AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <ctlgeom.h>]],[])], [CTLGEOM_H_CPPFLAG=-I$ctl_h_path; break])
+	  done
+	  AC_MSG_RESULT([$CTLGEOM_H_CPPFLAG])
+	  CPPFLAGS="$save_CPPFLAGS"])
+	if test "x$CTLGEOM_H_CPPFLAG" = "x"; then
+	  with_libctlgeom=no
+	fi
+	AC_SUBST(CTLGEOM_H_CPPFLAG)
+fi
+
+if test "x$with_libctlgeom" = xno; then
+	AC_MSG_WARN([Couldn't find libctlgeom, won't build mpb-data])
+fi
+AM_CONDITIONAL(WITH_LIBCTLGEOM, test x"$with_libctlgeom" = "xyes")
 
 ##############################################################################
 # check for nlopt library
@@ -496,12 +552,16 @@ AC_SUBST(EIGS_FLAGS_SCM)
 
 ##############################################################################
 
+if test "x$with_libctl" != xno; then
+
 # Find a shell that supports job control, for mpb-split:
 AC_PATH_PROG(SH_JOB, bash ksh ash, sh)
 
 if test x"$SH_JOB" = xsh; then
 	AC_MSG_WARN([Couldn't find bash or ksh shell on your system.  The mpb-split command may not work if your sh doesn't support job control.])
 fi
+
+fi # with_libctl
 
 ##############################################################################
 # The following function is used only for debugging.  Note that
