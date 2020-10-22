@@ -300,40 +300,49 @@ int check_maxwell_dielectric(maxwell_data *d,
 #define MAX_MOMENT_MESH NQUAD /* max # of moment-mesh vectors */
 #define MOMENT_MESH_R 0.5
 
-/* A function to set up the mesh given the grid dimensions, mesh size,
-   and lattice/reciprocal vectors.  (Any mesh sizes < 1 are taken to
-   be 1.)  The returned values are:
+/* Function to set up a voxel averaging mesh given the mesh size (any mesh 
+   sizes < 1 are taken to be 1). The returned values are:
 
    mesh_center: the center of the mesh, relative to the integer
                 mesh coordinates; e.g. the mesh_center for a 3x3x3
                 mesh is the point (1,1,1).
-   mesh_prod: the product of the mesh sizes.
+   mesh_prod: the product of the mesh sizes.                             */
+static void get_mesh(const int mesh_size[3], real mesh_center[3], int *mesh_prod)
+{
+     int i;
+
+     *mesh_prod = 1;
+     for (i = 0; i < 3; ++i) {
+	    int ms = MAX2(mesh_size[i], 1);
+	    mesh_center[i] = (ms - 1) * 0.5;
+	    *mesh_prod *= ms;
+     }
+}
+
+/* Function to set up a spherical mesh for moment averaging (to compute normal vectors)
+   given the grid dimensions nx, ny, nz and and the lattice & reciprocal vectors R & G.
+   The returned values are:
+
    moment_mesh: an array of size_moment_mesh vectors, in lattice
                 coordinates, of a "spherically-symmetric" mesh of
                 points centered on the origin, designed to be
-		used for averaging the first moment of epsilon at
-		a grid point (for finding the local surface normal).
+                used for averaging the first moment of epsilon at
+                a grid point (for finding the local surface normal).
    moment_mesh_weights: an array of size_moment_mesh weights to multiply
-                        the integrand values by.  */
-static void get_mesh(int nx, int ny, int nz, const int mesh_size[3],
+                the integrand values by.  
+   size_moment_mesh: number of integration points (2 in 1D, NUMQUAD2=12
+                in 2D, NUMQUAD3=50 in 3D)                                    */
+static void get_moment_mesh(int nx, int ny, int nz,
 		     real R[3][3], real G[3][3],
-		     real mesh_center[3], int *mesh_prod,
 		     real moment_mesh[MAX_MOMENT_MESH][3],
 		     real moment_mesh_weights[MAX_MOMENT_MESH],
 		     int *size_moment_mesh)
 {
-     int i,j;
+	 int i,j;
      real min_diam = 1e20;
      real mesh_total[3] = { 0, 0, 0 };
      int rank = nz > 1 ? 3 : (ny > 1 ? 2 : 1);
      real weight_sum = 0.0;
-
-     *mesh_prod = 1;
-     for (i = 0; i < 3; ++i) {
-	  int ms = MAX2(mesh_size[i], 1);
-	  mesh_center[i] = (ms - 1) * 0.5;
-	  *mesh_prod *= ms;
-     }
 
      *size_moment_mesh = num_sphere_quad[rank-1];
      for (i = 0; i < num_sphere_quad[rank-1]; ++i) {
@@ -370,10 +379,10 @@ static void get_mesh(int nx, int ny, int nz, const int mesh_size[3],
 	  }
 	  CHECK(fabs(len - min_diam*min_diam*(MOMENT_MESH_R*MOMENT_MESH_R))
 		< SMALL,
-		"bug in get_mesh: moment_mesh vector is wrong length");
+		"bug in get_moment_mesh: moment_mesh vector is wrong length");
      }
      CHECK(fabs(mesh_total[0]) + fabs(mesh_total[1]) + fabs(mesh_total[2])
-	   < SMALL, "bug in get_mesh: moment_mesh does not average to zero");
+	   < SMALL, "bug in get_moment_mesh: moment_mesh does not average to zero");
 
      /* Now, convert the moment_mesh vectors to lattice/grid coordinates;
         to do this, we multiply by the G matrix (inverse of R transposed) */
@@ -387,6 +396,8 @@ static void get_mesh(int nx, int ny, int nz, const int mesh_size[3],
 }
 
 /**************************************************************************/
+
+#define MESH_FINE_MULT_FAC 2 /* finer integration at interface voxels */
 
 /* The following function initializes the dielectric tensor md->eps_inv,
    using the dielectric function epsilon(&eps, &eps_inv, r, epsilon_data).
@@ -424,6 +435,8 @@ void set_maxwell_dielectric(maxwell_data *md,
      real eps_inv_total = 0.0;
      int mesh_prod;
      real mesh_prod_inv;
+     int mesh_fine_prod, mesh_fine_size[3];
+     real m1_fine, m2_fine, m3_fine, mesh_fine_prod_inv, mesh_fine_center[3];
      int size_moment_mesh = 0;
      int n1, n2, n3;
 #ifdef HAVE_MPI
@@ -435,9 +448,8 @@ void set_maxwell_dielectric(maxwell_data *md,
 
      n1 = md->nx; n2 = md->ny; n3 = md->nz;
 
-     get_mesh(n1, n2, n3, mesh_size, R, G,
-	      mesh_center, &mesh_prod, moment_mesh, moment_mesh_weights,
-	      &size_moment_mesh);
+     /* integration mesh for checking whether voxel intersects an interface */
+     get_mesh(mesh_size, mesh_center, &mesh_prod); 
      mesh_prod_inv = 1.0 / mesh_prod;
 
      s1 = 1.0 / n1;
@@ -446,6 +458,19 @@ void set_maxwell_dielectric(maxwell_data *md,
      m1 = s1 / MAX2(1, mesh_size[0]);
      m2 = s2 / MAX2(1, mesh_size[1]);
      m3 = s3 / MAX2(1, mesh_size[2]);
+
+     /* finer integration mesh for Kottke averaging at interfaces */
+     mesh_fine_size[0] = mesh_size[0] <= 1 ? 1 : MESH_FINE_MULT_FAC*mesh_size[0];
+     mesh_fine_size[1] = mesh_size[1] <= 1 ? 1 : MESH_FINE_MULT_FAC*mesh_size[1];
+     mesh_fine_size[2] = mesh_size[2] <= 1 ? 1 : MESH_FINE_MULT_FAC*mesh_size[2];
+     m1_fine = s1 / mesh_fine_size[0];
+     m2_fine = s2 / mesh_fine_size[1];
+     m3_fine = s3 / mesh_fine_size[2];
+     get_mesh(mesh_fine_size, mesh_fine_center, &mesh_fine_prod);
+     mesh_fine_prod_inv = 1.0 / mesh_fine_prod;
+
+     /* spherical integration mesh for computing normal vectors */
+     get_moment_mesh(n1, n2, n3, R, G, moment_mesh, moment_mesh_weights, &size_moment_mesh);
 
      LOOP_XYZ(md) {
 	  int mi, mj, mk;
@@ -516,6 +541,8 @@ void set_maxwell_dielectric(maxwell_data *md,
 	  ASSIGN_ESCALAR(eps_inv_mean.m02, 0,0);
 	  ASSIGN_ESCALAR(eps_inv_mean.m12, 0,0);
 
+      /* todo: improve detection of interfaces (test voxel corners instead of 
+	           mesh points (which are always in the interior of voxel)         */
 	  for (mi = 0; mi < mesh_size[0]; ++mi)
 	       for (mj = 0; mj < mesh_size[1]; ++mj)
 		    for (mk = 0; mk < mesh_size[2]; ++mk) {
@@ -677,14 +704,14 @@ void set_maxwell_dielectric(maxwell_data *md,
            ASSIGN_ESCALAR(tau.m01, 0.0, 0.0);
            ASSIGN_ESCALAR(tau.m02, 0.0, 0.0);
            ASSIGN_ESCALAR(tau.m12, 0.0, 0.0);
-           for (mi = 0; mi < mesh_size[0]; ++mi) {
-              for (mj = 0; mj < mesh_size[1]; ++mj) {
-                 for (mk = 0; mk < mesh_size[2]; ++mk) {
+           for (mi = 0; mi < mesh_fine_size[0]; ++mi) {
+              for (mj = 0; mj < mesh_fine_size[1]; ++mj) {
+                 for (mk = 0; mk < mesh_fine_size[2]; ++mk) {
                     real r[3];
                     symmetric_matrix eps, eps_inv, teps;
-                    r[0] = i1 * s1 + (mi - mesh_center[0]) * m1;
-                    r[1] = i2 * s2 + (mj - mesh_center[1]) * m2;
-                    r[2] = i3 * s3 + (mk - mesh_center[2]) * m3;
+                    r[0] = i1 * s1 + (mi - mesh_fine_center[0]) * m1_fine;
+                    r[1] = i2 * s2 + (mj - mesh_fine_center[1]) * m2_fine;
+                    r[2] = i3 * s3 + (mk - mesh_fine_center[2]) * m3_fine;
                     epsilon(&eps, &eps_inv, r, epsilon_data); /* cartesian space */
 
                     /* rotate epsilon tensor (TODO: pass a buffer, to avoid allocs?) */
@@ -712,20 +739,20 @@ void set_maxwell_dielectric(maxwell_data *md,
            }
            
            /* normalize τ-summation to get mean */
-           tau.m00 *= mesh_prod_inv;
-           tau.m11 *= mesh_prod_inv;
-           tau.m22 *= mesh_prod_inv;
+           tau.m00 *= mesh_fine_prod_inv;
+           tau.m11 *= mesh_fine_prod_inv;
+           tau.m22 *= mesh_fine_prod_inv;
 #ifdef WITH_HERMITIAN_EPSILON
-           tau.m01.re *= mesh_prod_inv;
-           tau.m02.re *= mesh_prod_inv;
-           tau.m12.re *= mesh_prod_inv;
-           tau.m01.im *= mesh_prod_inv;
-           tau.m02.im *= mesh_prod_inv;
-           tau.m12.im *= mesh_prod_inv;
+           tau.m01.re *= mesh_fine_prod_inv;
+           tau.m02.re *= mesh_fine_prod_inv;
+           tau.m12.re *= mesh_fine_prod_inv;
+           tau.m01.im *= mesh_fine_prod_inv;
+           tau.m02.im *= mesh_fine_prod_inv;
+           tau.m12.im *= mesh_fine_prod_inv;
 #else
-           tau.m01 *= mesh_prod_inv;
-           tau.m02 *= mesh_prod_inv;
-           tau.m12 *= mesh_prod_inv;
+           tau.m01 *= mesh_fine_prod_inv;
+           tau.m02 *= mesh_fine_prod_inv;
+           tau.m12 *= mesh_fine_prod_inv;
 #endif
            
            /* --- compute τ⁻¹[mean(τ(ε))] (i.e. the Kottke-averaged permittivity) --- */
